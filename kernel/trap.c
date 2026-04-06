@@ -81,8 +81,22 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  if(which_dev == 2) {
+    struct proc *p = myproc();
+    if(p != 0 && p->state == RUNNING) {
+      p->time_slice -= 1;
+      p->runtime += 1000; // 1Tick == 1000 Millitick
+      p->vruntime += (1000 * 1024) / p->weight; // vruntime += delta runtime * (nice 20's weight 1024 / current process weight)
+      
+      // time slice is run out  
+      if(p->time_slice <= 0) {
+        p->time_slice = 5; // time slice reset
+        // vdeadline update : vruntime + (5tick * 1024 / weight)
+        p->vdeadline = p->vruntime + (5000 * 1024) / p->weight;
+        yield();           // context switching
+      }
+    }
+  }
 
   prepare_return();
 
@@ -152,8 +166,23 @@ kerneltrap()
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
-    yield();
+  if(which_dev == 2 && myproc() != 0){
+    struct proc *p = myproc();
+      if(p != 0 && p->state == RUNNING) {
+        p->time_slice -= 1;
+        p->runtime += 1000; // 1Tick == 1000 Millitick
+        p->vruntime += (1000 * 1024) / p->weight; // vruntime += delta runtime * (nice 20's weight 1024 / current process weight)
+      
+      // time slice is run out  
+      if(p->time_slice <= 0) {
+        p->time_slice = 5; // time slice reset
+        // vdeadline update : vruntime + (5tick * 1024 / weight)
+        p->vdeadline = p->vruntime + (5000 * 1024) / p->weight;
+        yield();           // context switching
+      }
+    }
+  }
+    
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
@@ -174,7 +203,8 @@ clockintr()
   // ask for the next timer interrupt. this also clears
   // the interrupt request. 1000000 is about a tenth
   // of a second.
-  w_stimecmp(r_time() + 1000000);
+  // edit in pa2 : 1000000 -> 100000
+  w_stimecmp(r_time() + 100000);
 }
 
 // check if it's an external interrupt or software interrupt,

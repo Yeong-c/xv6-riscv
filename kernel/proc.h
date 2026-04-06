@@ -105,4 +105,9 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
   int nice; 		       // favorable scheduling
+  int time_slice;        // 타임 슬라이스
+  int weight;            // nice에 따른 가중치
+  uint64 runtime; // 실제 CPU 점유 시간
+  uint64 vruntime;       // 가상 런타임
+  uint64 vdeadline;      // 가상 데드라인
 };

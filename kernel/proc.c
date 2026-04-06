@@ -6,6 +6,17 @@
 #include "proc.h"
 #include "defs.h"
 
+const int nice_to_weight[40] = {
+    88761, 71755, 56483, 46273, 36291, // nice 0 ~ 4
+    29154, 23254, 18705, 14949, 11916, // nice 5 ~ 9
+     9548,  7620,  6100,  4904,  3906, // nice 10 ~ 14
+     3121,  2501,  1991,  1586,  1277, // nice 15 ~ 19
+     1024,   820,   655,   526,   423, // nice 20 ~ 24 
+      335,   272,   215,   172,   137, // nice 25 ~ 29
+      110,    87,    70,    56,    45, // nice 30 ~ 34
+       36,    29,    23,    18,    15  // nice 35 ~ 39
+};
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -125,6 +136,12 @@ found:
   p->pid = allocpid();
   p->state = USED;
   p->nice = 20; // add in pa1
+  p->weight = nice_to_weight[p->nice]; // add in pa2
+  p->time_slice = 5; // add in pa2            
+  p->runtime = 0; // add in pa2                       
+  p->vruntime = 0 ; // add in pa2                            
+  p->vdeadline = 0;  // add in pa2                         
+  
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -269,6 +286,13 @@ kfork(void)
   }
 
   np->nice = p->nice; // add in pa1 p's nice value -> np's nice value
+
+  //add in pa2 : sched information inheritance
+  np->weight = p->weight;                          
+  np->vruntime = p->vruntime;                        
+  np->runtime = 0;                              
+  np->time_slice = 5;                              
+  np->vdeadline = np->vruntime + (5000 * 1024) / np->weight; 
 
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
@@ -423,6 +447,7 @@ kwait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+// Per-CPU process scheduler.
 void
 scheduler(void)
 {
@@ -431,34 +456,55 @@ scheduler(void)
 
   c->proc = 0;
   for(;;){
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
     intr_on();
     intr_off();
 
-    int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+    struct proc *select_p = 0;       
+    uint64 v0 = (uint64)-1, sum_weight = 0, left_term = 0, min_vdeadline = (uint64)-1; 
+    int found = 0; // flag     
+    int cnt =0;
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+    // [Pass 1] v0 (런큐 내 최소 vruntime) 탐색
+    // -------------------------------------------------------------
+   for(p = proc; p < &proc[NPROC]; p++) {
+      if(p->state == RUNNABLE) {
+        cnt++;
+        if(p->vruntime < v0) {
+          v0 = p->vruntime;
+        }
       }
-      release(&p->lock);
     }
+
+    if(cnt > 0){
+      for(p = proc;p < &proc[NPROC];p++) {
+        if(p->state == RUNNABLE) {
+          sum_weight += p->weight;
+          left_term += (p->vruntime - v0) * p->weight;
+        }
+      }
+
+      for(p = proc; p < &proc[NPROC]; p++) {
+        if(p->state == RUNNABLE) {
+          if(left_term >= ((p->vruntime - v0) * sum_weight)) {
+            if(p->vdeadline < min_vdeadline) {
+              select_p = p;
+              min_vdeadline = p->vdeadline;
+            }
+          }
+        }
+      }
+    }
+      
+    if(select_p != 0) {
+        acquire(&select_p->lock);
+        select_p->state = RUNNING;
+        c->proc = select_p;
+        swtch(&c->context, &select_p->context);
+        c->proc = 0, found = 1; //schedule come back  
+        release(&select_p->lock);
+    }
+
     if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
       asm volatile("wfi");
     }
   }
@@ -582,6 +628,8 @@ wakeup(void *chan)
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
+        p->time_slice = 5; // time slice reset
+        p->vdeadline = p->vruntime + (5000 * 1024) / p->weight; // vdeadline update
       }
       release(&p->lock);
     }
@@ -728,6 +776,9 @@ setnice(int pid, int value)
 
     if(cur->state != UNUSED && cur->pid == pid){
       cur -> nice = value;
+      cur -> weight = nice_to_weight[value];
+      cur -> vdeadline = cur->vruntime + (5000 * 1024) / cur->weight;
+
       release(&cur->lock);
       return 0;
     }
@@ -739,38 +790,105 @@ setnice(int pid, int value)
 
 
 
+// trap.c에 있는 전역 변수(현재 틱 수)를 읽어오기 위한 extern 선언
+extern uint ticks;
+extern struct spinlock tickslock;
+
 void 
-ps(int pid){
+ps(int pid)
+{
+  struct proc *cur;
+  char *str;
+  int header_printed = 0;
 
-struct proc *cur;
-char *str;
-int header_printed = 0;
+  static char *states[] = {
+  [UNUSED] "UNUSED",
+  [USED] "USED",
+  [SLEEPING] "SLEEPING",
+  [RUNNABLE] "RUNNABLE",
+  [RUNNING] "RUNNING",
+  [ZOMBIE] "ZOMBIE"
+  };
 
-static char *states[] = {
-[UNUSED] "UNUSED",
-[USED] "USED",
-[SLEEPING] "SLEEPING",
-[RUNNABLE] "RUNNABLE",
-[RUNNING] "RUNNING",
-[ZOMBIE] "ZOMBIE"
-};
+  // -------------------------------------------------------------
+  // 1. Eligibility(적격성) 계산을 위한 현재 시스템 상태 스캔
+  // -------------------------------------------------------------
+  uint64 v0 = (uint64)-1;
+  uint64 sum_weight = 0;
+  uint64 left_term = 0;
+  int cnt = 0;
 
-for(cur = proc; cur < &proc[NPROC]; cur++){
-acquire(&cur->lock);
+  // [Pass 1] 런큐(RUNNABLE + RUNNING) 내 최소 vruntime(v0) 찾기
+  for(cur = proc; cur < &proc[NPROC]; cur++){
+    if(cur->state == RUNNABLE || cur->state == RUNNING){
+      cnt++;
+      if(cur->vruntime < v0) {
+        v0 = cur->vruntime;
+      }
+    }
+  }
 
-if(cur->state != UNUSED){
-if(pid == 0 || cur->pid == pid){
+  // [Pass 2] 가중치 합(Sigma w_i) 및 좌항(Sigma) 계산
+  if(cnt > 0){
+    for(cur = proc; cur < &proc[NPROC]; cur++){
+      if(cur->state == RUNNABLE || cur->state == RUNNING){
+        sum_weight += cur->weight;
+        left_term += (cur->vruntime - v0) * cur->weight;
+      }
+    }
+  }
 
-if(header_printed == 0){
-printf("name\tpid\tstate\tpriority\n");
-header_printed = 1;
-}
-str = states[cur->state];
-printf("%s\t%d\t%s\t%d\n",cur->name,cur->pid,str,cur->nice);
-}
-}
-release(&cur->lock);
-}
+  // -------------------------------------------------------------
+  // 2. 현재 시스템의 Total Tick (Millitick) 획득
+  // -------------------------------------------------------------
+  uint ticks_now;
+  acquire(&tickslock);
+  ticks_now = ticks;
+  release(&tickslock);
+  uint64 total_tick = ticks_now * 1000; // 밀리틱 단위 변환
+
+  // -------------------------------------------------------------
+  // 3. 프로세스 정보 출력
+  // -------------------------------------------------------------
+  for(cur = proc; cur < &proc[NPROC]; cur++){
+    acquire(&cur->lock);
+
+    if(cur->state != UNUSED){
+      if(pid == 0 || cur->pid == pid){
+        
+        // 헤더 출력
+        if(header_printed == 0){
+          printf("name\tpid\tstate\tpriority\truntime/weight\truntime\tvruntime\tvdeadline\tis_eligible\ttick\n");
+          header_printed = 1;
+        }
+        str = states[cur->state];
+
+        // 현재 프로세스의 Eligibility 판별
+        int is_eligible = 0;
+        if(cnt > 0) {
+          if (left_term >= (cur->vruntime - v0) * sum_weight) {
+            is_eligible = 1;
+          }
+        } else {
+          is_eligible = 1; // 실행 대기 중인 프로세스가 없을 때의 기본값
+        }
+
+        // xv6-riscv printf 포맷에 맞추어 출력
+        printf("%s\t%d\t%s\t%d\t%d\t%d\t%d\t%d\t%s\t%d\n",
+               cur->name,
+               cur->pid,
+               str,
+               cur->nice,                                       // priority
+               (int)(cur->weight > 0 ? cur->runtime / cur->weight : 0), // runtime/weight
+               (int)cur->runtime,                        // runtime
+               (int)cur->vruntime,                              // vruntime
+               (int)cur->vdeadline,                             // vdeadline
+               is_eligible ? "true" : "false",                  // eligibility
+               (int)total_tick);                                // total tick
+      }
+    }
+    release(&cur->lock);
+  }
 }
 
 
