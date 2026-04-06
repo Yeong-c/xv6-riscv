@@ -794,6 +794,9 @@ setnice(int pid, int value)
 extern uint ticks;
 extern struct spinlock tickslock;
 
+extern uint ticks;
+extern struct spinlock tickslock;
+
 void 
 ps(int pid)
 {
@@ -801,24 +804,23 @@ ps(int pid)
   char *str;
   int header_printed = 0;
 
+  // [정렬 핵심 1] 모든 상태 문자열을 공백을 포함해 정확히 8글자로 통일합니다.
+  // 이렇게 하면 \t 탭 문자가 항상 일정한 칸 수로 밀려나게 됩니다.
   static char *states[] = {
-  [UNUSED] "UNUSED",
-  [USED] "USED",
+  [UNUSED]   "UNUSED  ",
+  [USED]     "USED    ",
   [SLEEPING] "SLEEPING",
   [RUNNABLE] "RUNNABLE",
-  [RUNNING] "RUNNING",
-  [ZOMBIE] "ZOMBIE"
+  [RUNNING]  "RUNNING ",
+  [ZOMBIE]   "ZOMBIE  "
   };
 
-  // -------------------------------------------------------------
-  // 1. Eligibility(적격성) 계산을 위한 현재 시스템 상태 스캔
-  // -------------------------------------------------------------
+  // Eligibility 판별을 위한 시스템 상태 스캔
   uint64 v0 = (uint64)-1;
   uint64 sum_weight = 0;
   uint64 left_term = 0;
   int cnt = 0;
 
-  // [Pass 1] 런큐(RUNNABLE + RUNNING) 내 최소 vruntime(v0) 찾기
   for(cur = proc; cur < &proc[NPROC]; cur++){
     if(cur->state == RUNNABLE || cur->state == RUNNING){
       cnt++;
@@ -828,7 +830,6 @@ ps(int pid)
     }
   }
 
-  // [Pass 2] 가중치 합(Sigma w_i) 및 좌항(Sigma) 계산
   if(cnt > 0){
     for(cur = proc; cur < &proc[NPROC]; cur++){
       if(cur->state == RUNNABLE || cur->state == RUNNING){
@@ -838,65 +839,63 @@ ps(int pid)
     }
   }
 
-  // -------------------------------------------------------------
-  // 2. 현재 시스템의 Total Tick (Millitick) 획득
-  // -------------------------------------------------------------
+  // 시스템 Tick 획득
   uint ticks_now;
   acquire(&tickslock);
   ticks_now = ticks;
   release(&tickslock);
-  uint64 total_tick = ticks_now * 1000; // 밀리틱 단위 변환
+  uint64 total_tick = ticks_now * 1000; 
 
-  // -------------------------------------------------------------
-  // 3. 프로세스 정보 출력
-  // -------------------------------------------------------------
   for(cur = proc; cur < &proc[NPROC]; cur++){
     acquire(&cur->lock);
 
     if(cur->state != UNUSED){
       if(pid == 0 || cur->pid == pid){
         
-        // 헤더 출력
+        // [정렬 핵심 2] 헤더 문자열의 \t 배치를 조정합니다.
         if(header_printed == 0){
-          printf("name\tpid\tstate\tpriority\truntime/weight\truntime\tvruntime\tvdeadline\tis_eligible\ttick\n");
+          printf("name\tpid\tstate\t\tpriority\truntime/weight\truntime\tvruntime\tvdeadline\tis_eligible\ttick\n");
           header_printed = 1;
         }
         str = states[cur->state];
 
-        // 현재 프로세스의 Eligibility 판별
+        // Eligibility (Underflow 방지 로직 포함)
         int is_eligible = 0;
         if(cnt > 0) {
-          if (left_term >= (cur->vruntime - v0) * sum_weight) {
-            is_eligible = 1;
+          if (cur->vruntime < v0) {
+            is_eligible = 1; 
+          } else {
+            if (left_term >= (cur->vruntime - v0) * sum_weight) {
+              is_eligible = 1;
+            }
           }
         } else {
-          is_eligible = 1; // 실행 대기 중인 프로세스가 없을 때의 기본값
+          is_eligible = 1; 
         }
 
-        // xv6-riscv printf 포맷에 맞추어 출력
-        printf("%s\t%d\t%s\t%d\t%d\t%d\t%d\t%d\t%s\t%d\n",
+        // [정렬 핵심 3] 데이터 길이에 맞춰 \t 개수를 세밀하게 조절했습니다.
+        printf("%s\t%d\t%s\t%d\t\t%d\t\t%d\t%d\t\t%d\t\t%s\t\t%d\n",
                cur->name,
                cur->pid,
                str,
-               cur->nice,                                       // priority
-               (int)(cur->weight > 0 ? cur->runtime / cur->weight : 0), // runtime/weight
-               (int)cur->runtime,                        // runtime
-               (int)cur->vruntime,                              // vruntime
-               (int)cur->vdeadline,                             // vdeadline
-               is_eligible ? "true" : "false",                  // eligibility
-               (int)total_tick);                                // total tick
+               cur->nice,
+               (int)(cur->weight > 0 ? cur->runtime / cur->weight : 0),
+               (int)cur->runtime,
+               (int)cur->vruntime,
+               (int)cur->vdeadline,
+               is_eligible ? "true" : "false",
+               (int)total_tick);
       }
     }
     release(&cur->lock);
   }
 }
 
-
 int
 waitpid(int pid){
 struct proc *p = myproc();
 struct proc *np;
-int checkpid;
+int checkpid; 
 
 acquire(&wait_lock);
 

@@ -2,71 +2,45 @@
 #include "kernel/stat.h"
 #include "user/user.h"
 
+int main(int argc, char *argv[]) {
+    int pid = fork();
 
-int main (int argc, char *argv[]){
+    if(pid < 0){
+        printf("fork failed\n");
+        exit(1);
+    }
 
-int pid = getpid();
-int cpid;
-int ret;
+    if(pid == 0){
+        // [자식 프로세스]
+        // 우선순위를 10으로 높임 (Weight 증가 -> 더 많은 CPU 시간 할당 기대)
+        setnice(getpid(), 10); 
+        
+        // CPU를 강제로 점유하여 타이머 인터럽트(Tick)와 vruntime을 누적시킴
+        // (가상 머신 성능에 따라 루프 숫자를 늘리거나 줄이셔도 됩니다)
+        volatile int i;
+        for(i = 0; i < 300000000; i++) {
+            // Busy waiting...
+        }
+        
+        exit(0);
+    } else {
+        // [부모 프로세스]
+        // 우선순위를 20 (기본값)으로 유지
+        setnice(getpid(), 20);
+        
+        // 자식과 동시에 CPU를 두고 경쟁
+        volatile int i;
+        for(i = 0; i < 150000000; i++) {
+            // Busy waiting...
+        }
 
-printf(">>Testing meminfo()\n");
-printf("system total memory: %ld bytes\n\n",meminfo());
+        // 경쟁 도중(또는 직후)에 시스템 전체 프로세스 상태 출력
+        printf("\n=== TEST START ===\n");
+        ps(0);
 
-printf(">>Testing getnice()\n");
-printf("Current PID: %d, nice: %d\n",pid, getnice(pid));
-printf("Invalid PID (9999) nice: %d\n\n",getnice(9999));
+        // 자식 프로세스가 끝날 때까지 대기
+        waitpid(pid);
+    }
 
-printf(">>Testing setnice()\n");
-ret = setnice(pid,10);
-printf("Set nice to 10 for PID %d (Return: %d)\n",pid,ret);
-printf("Current nice: %d\n\n", getnice(pid));
-
-ret = setnice(pid,-5);
-printf("Set invalid nice (-5) for PID %d (Return: %d)\n",pid,ret);
-ret = setnice(pid,40);
-printf("Set invalid nice (40) for PID %d (Return: %d)\n",pid,ret);
-ret = setnice(9999,10);
-printf("Set nice for invalid PID 9999 (Return: %d)\n\n",ret);
-
-printf(">>Testing ps()\n");
-printf("---- ps(0) : ALL PROCESSES ----\n");
-ps(0);
-printf("---- ps(%d) : CURRENT PROCESSES ----\n",pid);
-ps(pid);
-printf("---- ps(9999) : Invalid  PROCESSES(print nothing) ----\n");
-ps(9999);
-printf("\n");
-
-printf(">>Testing waitpid()\n");
-cpid = fork();
-
-if(cpid == 0){	
-printf("child is running (PID %d)\n",getpid());
-for(volatile int i = 0 ; i < 10000000;i++);
-printf("child is exiting (PID %d)\n",getpid());
-exit(0);
+    exit(0);
 }
-
-else if (cpid >0){
-printf("parent waiting for child (PID %d)\n", cpid);
-ret = waitpid(cpid);
-printf("waitpid return for child: %d\n", ret);
-
-ret = waitpid(9999);
-printf("waitpid return for invalid PID 9999: %d\n", ret);
-
-ret = waitpid(1);
-printf("waitpid return for init PID 1: %d\n", ret);
-}
-else {
-printf("fork failed\n");
-}
-exit(0);
-}
-
-
-
-
-
-
-
