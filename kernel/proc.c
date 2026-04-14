@@ -868,7 +868,7 @@ ps(int pid)
         }
 
         if(tick_printed == 0) {
-            printf("%s\t%d\t%s\t%d\t\t%d\t\t%d\t\t%d\t\t%d\t\t%s\t\t%d\n",
+            printf("%s\t%d\t%s\t%d\t\t%d\t\t%d\t\t%d\t\t%d\t\t%s    \t%d\n",
                    cur->name,
                    cur->pid,
                    str,
