@@ -68,9 +68,22 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if((r_scause() == 15 || r_scause() == 13) &&
-            vmfault(p->pagetable, r_stval(), (r_scause() == 13)? 1 : 0) != 0) {
-    // page fault on lazily-allocated page
+  } else if(r_scause() == 15 || r_scause() == 13) {
+    // edit in project3
+    uint64 va = r_stval();
+    int write = (r_scause() == 15);
+    if(va < p->sz && vmfault(p->pagetable, va, write ? 0 : 1) != 0){
+      // lazy sbrk fault handled
+    } else if(va >= MMAPBASE && mmap_handle_fault(va, write) == 1){
+      // mmap fault handled
+    } else if(va >= MMAPBASE){
+      // mmap region fault, handler failed
+      setkilled(p);
+    } else {
+      printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
+      setkilled(p);
+    }
   } else {
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
@@ -81,22 +94,9 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2) {
-    struct proc *p = myproc();
-    if(p != 0 && p->state == RUNNING) {
-      p->time_slice -= 1;
-      p->runtime += 1000; // 1Tick == 1000 Millitick
-      p->vruntime += (1000 * 1024) / p->weight; // vruntime += delta runtime * (nice 20's weight 1024 / current process weight)
-      
-      // time slice is run out  
-      if(p->time_slice <= 0) {
-        p->time_slice = 5; // time slice reset
-        // vdeadline update : vruntime + (5tick * 1024 / weight)
-        p->vdeadline = p->vruntime + (5000 * 1024) / p->weight;
-        yield();           // context switching
-      }
-    }
-  }
+  // edit in project3: rolled back to xv6 original (yield every timer tick)
+  if(which_dev == 2)
+    yield();
 
   prepare_return();
 
@@ -166,23 +166,9 @@ kerneltrap()
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0){
-    struct proc *p = myproc();
-      if(p != 0 && p->state == RUNNING) {
-        p->time_slice -= 1;
-        p->runtime += 1000; // 1Tick == 1000 Millitick
-        p->vruntime += (1000 * 1024) / p->weight; // vruntime += delta runtime * (nice 20's weight 1024 / current process weight)
-      
-      // time slice is run out  
-      if(p->time_slice <= 0) {
-        p->time_slice = 5; // time slice reset
-        // vdeadline update : vruntime + (5tick * 1024 / weight)
-        p->vdeadline = p->vruntime + (5000 * 1024) / p->weight;
-        yield();           // context switching
-      }
-    }
-  }
-    
+  // edit in project3: rolled back to xv6 original
+  if(which_dev == 2 && myproc() != 0)
+    yield();
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.

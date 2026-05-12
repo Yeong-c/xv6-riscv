@@ -62,6 +62,7 @@ procinit(void)
   
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
+  mmapinit(); // edit in project3
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
       p->state = UNUSED;
@@ -324,6 +325,8 @@ kfork(void)
   np->parent = p;
   release(&wait_lock);
 
+  mmap_copy(p, np); // edit in project3
+
   acquire(&np->lock);
   np->state = RUNNABLE;
   release(&np->lock);
@@ -356,6 +359,8 @@ kexit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  mmap_cleanup(p); // edit in project3
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
@@ -448,6 +453,8 @@ kwait(uint64 addr)
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
 // Per-CPU process scheduler.
+// edit in project3: rolled back to xv6 original round-robin scheduler
+// (PA2 CFS scheduler was designed for CPUS=1; PA3 requires CPUS=3)
 void
 scheduler(void)
 {
@@ -456,55 +463,34 @@ scheduler(void)
 
   c->proc = 0;
   for(;;){
+    // The most recent process to run may have had interrupts
+    // turned off; enable them to avoid a deadlock if all
+    // processes are waiting. Then turn them back off
+    // to avoid a possible race between an interrupt
+    // and wfi.
     intr_on();
     intr_off();
 
-    struct proc *select_p = 0;       
-    uint64 v0 = (uint64)-1, sum_weight = 0, left_term = 0, min_vdeadline = (uint64)-1; 
-    int found = 0; // flag     
-    int cnt =0;
-
-    // [Pass 1] v0 (런큐 내 최소 vruntime) 탐색
-    // -------------------------------------------------------------
-   for(p = proc; p < &proc[NPROC]; p++) {
+    int found = 0;
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
       if(p->state == RUNNABLE) {
-        cnt++;
-        if(p->vruntime < v0) {
-          v0 = p->vruntime;
-        }
-      }
-    }
+        // Switch to chosen process.  It is the process's job
+        // to release its lock and then reacquire it
+        // before jumping back to us.
+        p->state = RUNNING;
+        c->proc = p;
+        swtch(&c->context, &p->context);
 
-    if(cnt > 0){
-      for(p = proc;p < &proc[NPROC];p++) {
-        if(p->state == RUNNABLE) {
-          sum_weight += p->weight;
-          left_term += (p->vruntime - v0) * p->weight;
-        }
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        c->proc = 0;
+        found = 1;
       }
-
-      for(p = proc; p < &proc[NPROC]; p++) {
-        if(p->state == RUNNABLE) {
-          if(left_term >= ((p->vruntime - v0) * sum_weight)) {
-            if(p->vdeadline < min_vdeadline) {
-              select_p = p;
-              min_vdeadline = p->vdeadline;
-            }
-          }
-        }
-      }
+      release(&p->lock);
     }
-      
-    if(select_p != 0) {
-        acquire(&select_p->lock);
-        select_p->state = RUNNING;
-        c->proc = select_p;
-        swtch(&c->context, &select_p->context);
-        c->proc = 0, found = 1; //schedule come back  
-        release(&select_p->lock);
-    }
-
     if(found == 0) {
+      // nothing to run; stop running on this core until an interrupt.
       asm volatile("wfi");
     }
   }
@@ -627,9 +613,8 @@ wakeup(void *chan)
     if(p != myproc()){
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
+        // edit in project3: rolled back PA2 time_slice/vdeadline update
         p->state = RUNNABLE;
-        p->time_slice = 5; // time slice reset
-        p->vdeadline = p->vruntime + (5000 * 1024) / p->weight; // vdeadline update
       }
       release(&p->lock);
     }
@@ -649,10 +634,9 @@ kkill(int pid)
     if(p->pid == pid){
       p->killed = 1;
       if(p->state == SLEEPING){
+        // edit in project3: rolled back PA2 time_slice/vdeadline update
         // Wake process from sleep().
         p->state = RUNNABLE;
-        p->time_slice = 5;
-        p->vdeadline = p->vruntime + (5000 * 1024) / p->weight;
       }
       release(&p->lock);
       return 0;

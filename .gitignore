@@ -16,3 +16,9 @@ kernel/kernel
 user/usys.S
 .gdbinit
 TAGS
+
+# Claude / IDE / OS
+.claude/
+.DS_Store
+.vscode/
+.idea/

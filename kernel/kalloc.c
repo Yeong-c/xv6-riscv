@@ -100,3 +100,15 @@ release(&kmem.lock);
 
 return bytes;
 }
+
+// edit in project3
+int
+freemem(void)
+{
+  struct run *cur;
+  int n = 0;
+  acquire(&kmem.lock);
+  for(cur = kmem.freelist; cur; cur = cur->next) n++;
+  release(&kmem.lock);
+  return n;
+}

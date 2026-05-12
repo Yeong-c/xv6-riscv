@@ -59,6 +59,15 @@ void            ireclaim(int);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+int             freemem(void); // edit in project3
+
+// mmap.c (edit in project3)
+uint64          mmap(uint64 addr, int length, int prot, int flags, int fd, int offset);
+int             munmap(uint64 addr);
+int             mmap_handle_fault(uint64 va, int write);
+void            mmap_copy(struct proc *parent, struct proc *child);
+void            mmap_cleanup(struct proc *p);
+void            mmapinit(void);
 
 // log.c
 void            initlog(int, struct superblock*);

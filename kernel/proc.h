@@ -81,6 +81,20 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+// edit in project3
+struct mmap_area {
+  struct file *f;     // file mapping이면 file pointer, anon이면 0
+  uint64 addr;        // virtual address (MMAPBASE 포함)
+  int length;
+  int offset;
+  int prot;
+  int flags;
+  struct proc *p;     // owning process
+  int used;           // 0=free slot, 1=in use
+};
+
+extern struct mmap_area mmap_areas[NMMAP];
+
 // Per-process state
 struct proc {
   struct spinlock lock;

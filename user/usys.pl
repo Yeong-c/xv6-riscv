@@ -47,3 +47,7 @@ entry("setnice");
 entry("ps");
 entry("meminfo");
 entry("waitpid");
+# edit in project3
+entry("mmap");
+entry("munmap");
+entry("freemem");
